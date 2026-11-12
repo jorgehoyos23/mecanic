@@ -744,6 +744,120 @@ async function homeMechanic(view) {
   bindRowLinks(view);
 }
 
+// ------------------------------------------------------------------ cabina: tablero de instrumentos del taller
+const polar = (r, deg) => {
+  const a = (deg * Math.PI) / 180;
+  return [100 + r * Math.sin(a), 100 - r * Math.cos(a)].map((n) => n.toFixed(2));
+};
+const arcPath = (r, from, to) => {
+  const [x1, y1] = polar(r, from);
+  const [x2, y2] = polar(r, to);
+  return `M${x1} ${y1}A${r} ${r} 0 ${to - from > 180 ? 1 : 0} 1 ${x2} ${y2}`;
+};
+
+/** Reloj analógico tipo carro. value/max en 0..1; las marcas y la zona roja son decorativas pero proporcionales. */
+function gauge({ ratio, ghost = 0, labels, redFrom = 1, sweep = 135, cls = '' }) {
+  const ang = (t) => -sweep + t * 2 * sweep;
+  const ticks = [];
+  const n = (labels.length - 1) * 5;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const major = i % 5 === 0;
+    const [x1, y1] = polar(major ? 70 : 74, ang(t));
+    const [x2, y2] = polar(80, ang(t));
+    ticks.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" class="${major ? 'major' : ''} ${t >= redFrom ? 'red' : ''}"/>`);
+  }
+  const nums = labels.map((l, i) => {
+    const [x, y] = polar(56, ang(i / (labels.length - 1)));
+    return `<text x="${x}" y="${y}">${l}</text>`;
+  }).join('');
+  const r = Math.max(0, Math.min(1, ratio));
+  const g = Math.max(r, Math.min(1, r + ghost));
+  return `<svg class="gauge ${cls}" viewBox="0 0 200 ${sweep > 100 ? 200 : 130}" aria-hidden="true">
+      <path d="${arcPath(86, ang(0), ang(1))}" class="track"/>
+      ${redFrom < 1 ? `<path d="${arcPath(86, ang(redFrom), ang(1))}" class="redzone"/>` : ''}
+      ${g > r ? `<path d="${arcPath(86, ang(r), ang(g))}" class="ghost"/>` : ''}
+      ${r > 0.002 ? `<path d="${arcPath(86, ang(0), ang(r))}" class="fill" pathLength="1"/>` : ''}
+      <g class="ticks">${ticks.join('')}</g><g class="nums">${nums}</g>
+      <g class="needle" data-angle="${ang(r)}" data-sweep="${sweep}" style="transform:rotate(${-sweep}deg)"><path d="M98 104 L100 28 L102 104Z"/></g>
+      <circle cx="100" cy="100" r="7" class="hub"/></svg>`;
+}
+
+/** Odómetro con rodillos de dígitos que giran hasta el número. */
+const odometer = (num, digits = 6) => `<span class="odo">${String(Math.max(0, num)).padStart(digits, '0').slice(-digits).split('')
+  .map((d) => `<span class="roll"><span data-digit="${d}">${'0123456789'.split('').map((x) => `<i>${x}</i>`).join('')}</span></span>`).join('')}</span>`;
+
+// testigos luminosos del tablero (24×24)
+const LAMP_ICONS = {
+  engine: 'M3 10h2V8h3V6h6v2h2l2 3h2V9h2v8h-2v-2h-2l-2 3H9l-2-2H5v2H3z',
+  battery: 'M3 7h18v12H3zM7 4v3M17 4v3M6 13h4M8 11v4M14 13h4',
+  oil: 'M2 12h9l3-3 7 2-6 7H4zM11 9V6H8M21 11l1.5 2.5a1.5 1.5 0 1 1-3 0z',
+  quote: 'M7 3h10M7 21h10M8 3c0 5 8 5 8 9s-8 4-8 9M16 3c0 5-8 5-8 9s8 4 8 9',
+  money: ICONS.money,
+  tool: ICONS.wrench,
+};
+const lamp = (id, label, on, tone, detail, href) => `<a class="lamp ${on ? `on ${tone}` : ''}" href="${href}" title="${esc(detail)}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${LAMP_ICONS[id]}"/></svg>
+    <span>${label}</span><b>${esc(detail)}</b></a>`;
+
+function cockpit({ paid, pending, activeCount, total, capacity, unassigned, quoted, lowParts, partsCount, svcUp, critical }) {
+  const top = Math.max(1_000_000, Math.ceil((paid + pending) * 1.15 / 500_000) * 500_000);
+  const step = top / 4;
+  const mill = (v) => (v >= 1_000_000 ? `${+(v / 1_000_000).toFixed(1)}M` : v ? `${Math.round(v / 1000)}k` : '0');
+  const load = activeCount / Math.max(1, capacity);
+  const fuel = partsCount ? (partsCount - lowParts) / partsCount : 1;
+  const hour = new Date().getHours();
+  return `<section class="cockpit" aria-label="Tablero de instrumentos del taller">
+    <div class="cockpit-glass"></div>
+    <header class="cockpit-top"><span class="vin">MECASOLIC · VIN ${String(total).padStart(4, '0')}-TLR</span>
+      <span class="lcd">${svcUp === SVCS.length ? '● MOTOR OK' : `▲ ${SVCS.length - svcUp} FALLA(S)`} · ${dbEngine().toUpperCase()} · ${hour < 12 ? 'TURNO AM' : 'TURNO PM'}</span>
+      <button type="button" class="ignite" data-ignite title="Arranque: barrido de agujas">${ico('bolt')} START</button></header>
+    <div class="dials">
+      <a class="dial side" href="#/inventario">
+        ${gauge({ ratio: fuel, labels: ['E', '1/2', 'F'], sweep: 60, cls: fuel < 0.35 ? 'warn' : '' })}
+        <div class="readout"><small>COMBUSTIBLE · INVENTARIO</small><b>${Math.round(fuel * 100)}%</b><em>${lowParts} repuesto(s) en reserva</em></div></a>
+      <a class="dial main" href="#/facturas">
+        ${gauge({ ratio: paid / top, ghost: pending / top, labels: [0, 1, 2, 3, 4].map((i) => mill(i * step)) })}
+        <div class="readout"><small>VELOCÍMETRO · INGRESOS</small><b data-count="${paid}" data-money>${money(paid)}</b>
+          <em>${pending ? `+ ${money(pending)} por cobrar` : 'sin cartera pendiente'}</em></div></a>
+      <a class="dial side" href="#/ordenes">
+        ${gauge({ ratio: load, labels: [0, 2, 4, 6, 8], redFrom: 0.8, cls: load >= 0.8 ? 'warn' : '' })}
+        <div class="readout"><small>TACÓMETRO · CARGA</small><b>${Math.round(load * 100)}%</b><em>${activeCount} órdenes activas / ${capacity} cupos</em></div></a>
+    </div>
+    <div class="cockpit-bottom">
+      <div class="odo-wrap"><small>ODÓMETRO · ÓRDENES HISTÓRICAS</small>${odometer(total)}</div>
+      <div class="lamps">
+        ${lamp('engine', 'CHECK', unassigned > 0, 'amber', `${unassigned} sin mecánico`, '#/ordenes')}
+        ${lamp('quote', 'ESPERA', quoted > 0, 'amber', `${quoted} cotización(es) sin respuesta`, '#/ordenes')}
+        ${lamp('oil', 'ACEITE', lowParts > 0, 'red', critical ? `Bajo: ${critical}` : 'Stock al día', '#/inventario')}
+        ${lamp('battery', 'SISTEMA', svcUp < SVCS.length, 'red', `${svcUp}/${SVCS.length} servicios en línea`, '#/inicio')}
+        ${lamp('money', 'CARTERA', pending > 0, 'amber', pending ? `${money(pending)} por cobrar` : 'Todo cobrado', '#/facturas')}
+        ${lamp('tool', 'EN RAMPA', load > 0, 'green', `${activeCount} vehículo(s) en el taller`, '#/ordenes')}
+      </div>
+    </div></section>`;
+}
+
+/** Secuencia de arranque: las agujas barren hasta el tope y bajan a su valor, como al encender un carro. */
+function igniteCockpit(root, { sweepFirst = true } = {}) {
+  const box = $('.cockpit', root);
+  if (!box) return;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const needles = $$('.needle', box);
+  const rolls = $$('.roll > span', box);
+  box.classList.remove('lit'); void box.offsetWidth; box.classList.add('lit');
+  rolls.forEach((r) => { r.style.transform = 'translateY(0)'; });
+  needles.forEach((n) => { n.style.transition = 'none'; n.style.transform = `rotate(${-n.dataset.sweep}deg)`; });
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    needles.forEach((n) => {
+      const max = +n.dataset.sweep;
+      n.style.transition = '';
+      n.style.transform = `rotate(${reduce || !sweepFirst ? n.dataset.angle : max}deg)`;
+      if (!reduce && sweepFirst) setTimeout(() => { n.style.transform = `rotate(${n.dataset.angle}deg)`; }, 750);
+    });
+    rolls.forEach((r, i) => setTimeout(() => { r.style.transform = `translateY(-${r.dataset.digit}em)`; }, reduce ? 0 : 900 + i * 90));
+  }));
+}
+
 async function homeAdmin(view) {
   const [stats, orders, parts, invoices, mechs] = await Promise.all([
     api('ordenes', '/orders/stats'), api('ordenes', '/orders'), api('inventario', '/parts'),
@@ -757,14 +871,15 @@ async function homeAdmin(view) {
   const health = S.health;
   const dbName = (h) => h?.database?.name ? String(h.database.name).split(/[\\/]/).pop() : '';
 
-  view.innerHTML = `<div class="page-head"><div><h1>Centro de mando</h1><div class="sub">Visión general del taller en tiempo real</div></div>
+  const lowParts = parts.filter((p) => p.low_stock);
+  view.innerHTML = `<div class="page-head"><div><h1>Centro de mando</h1><div class="sub">Tu taller como un tablero de instrumentos · en tiempo real</div></div>
       <a class="btn primary" href="#/ordenes">${ico('clipboard')} Ver órdenes</a></div>
-    <div class="grid cols-4">
-      ${kpi('Órdenes activas', activeCount, 'clipboard', { href: '#/ordenes', sub: `${stats.total} órdenes registradas` })}
-      ${kpi('Sin asignar', b.SOLICITADA, 'alert', { tone: 'hot', href: '#/ordenes', sub: 'esperando mecánico' })}
-      ${kpi('Ingresos cobrados', paid, 'money', { tone: 'green', href: '#/facturas', isMoney: true, sub: 'facturas pagadas' })}
-      ${kpi('Por cobrar', pending, 'receipt', { tone: 'violet', href: '#/facturas', isMoney: true, sub: `${invoices.filter((i) => i.status === 'PENDIENTE').length} factura(s)` })}
-    </div>
+    ${cockpit({
+      paid, pending, activeCount, total: stats.total,
+      capacity: Math.max(3, mechs.filter((m) => m.active !== false).length * 3),
+      unassigned: b.SOLICITADA || 0, quoted: b.COTIZADA || 0, lowParts: lowParts.length, partsCount: parts.length,
+      svcUp: SVCS.filter((s) => health[s]).length, critical: lowParts[0]?.name,
+    })}
     <div class="grid span mt">
       <div class="card corner"><h2>Órdenes por estado</h2>
         ${donut(Object.keys(STATUS).map((s) => ({ label: STATUS[s].label, value: b[s] || 0, color: STATUS[s].color })), 'órdenes')}</div>
@@ -789,6 +904,8 @@ async function homeAdmin(view) {
       <div class="card"><div class="card-head"><h2>Actividad reciente</h2></div>${miniOrders(orders.slice(0, 6))}</div>
     </div>`;
   bindRowLinks(view);
+  igniteCockpit(view);
+  $('[data-ignite]', view)?.addEventListener('click', () => igniteCockpit(view));
 }
 
 // ------------------------------------------------------------------ vistas: vehículos (cliente)
