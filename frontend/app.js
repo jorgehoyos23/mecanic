@@ -316,6 +316,19 @@ function saveSession(res) {
   store.set('token', S.token); store.set('user', S.user);
 }
 
+/** El rol SIEMPRE lo dice el servidor (no lo guardado en el navegador, que se puede editar a mano). */
+async function verifySession() {
+  if (!S.token) return;
+  try {
+    S.user = await api('auth', '/me');
+    store.set('user', S.user);
+  } catch {
+    S.token = null; S.user = null;
+    store.del('token'); store.del('user');
+  }
+  if (S.user && !NAV[role()]) logout();
+}
+
 function logout() {
   S.token = null; S.user = null;
   store.del('token'); store.del('user');
@@ -1347,6 +1360,7 @@ VIEWS.inventario = async (view) => {
 window.addEventListener('hashchange', router);
 window.addEventListener('DOMContentLoaded', async () => {
   await boot();
+  await verifySession();
   if (!S.schedule) refreshSchedule();
   setInterval(refreshSchedule, 60000); // revisa el horario cada minuto
   router();
