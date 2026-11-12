@@ -1,0 +1,5 @@
+.venv/
+.datos_locales/
+__pycache__/
+*.db
+.env

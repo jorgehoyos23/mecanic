@@ -1,0 +1,124 @@
+name: mecasolic
+
+x-service: &service
+  build:
+    context: ./services
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+x-env: &env
+  JWT_SECRET: ${JWT_SECRET:-cambia-este-secreto-en-produccion}
+  TOKEN_TTL_MINUTES: "480"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: taller
+      POSTGRES_PASSWORD: taller
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taller"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  auth:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: auth } }
+    environment:
+      <<: *env
+      DATABASE_URL: postgresql+psycopg://taller:taller@postgres:5432/auth_db
+      ROOT_PATH: /api/auth
+      ADMIN_EMAIL: admin@taller.com
+      ADMIN_PASSWORD: admin123
+
+  clientes:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: clientes } }
+    environment:
+      <<: *env
+      DATABASE_URL: postgresql+psycopg://taller:taller@postgres:5432/clientes_db
+      ROOT_PATH: /api/clientes
+
+  mecanicos:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: mecanicos } }
+    environment:
+      <<: *env
+      DATABASE_URL: postgresql+psycopg://taller:taller@postgres:5432/mecanicos_db
+      ROOT_PATH: /api/mecanicos
+    depends_on:
+      postgres: { condition: service_healthy }
+      auth: { condition: service_healthy }
+
+  servicios:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: servicios } }
+    environment:
+      <<: *env
+      DATABASE_URL: postgresql+psycopg://taller:taller@postgres:5432/servicios_db
+      ROOT_PATH: /api/servicios
+
+  ordenes:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: ordenes } }
+    environment:
+      <<: *env
+      DATABASE_URL: postgresql+psycopg://taller:taller@postgres:5432/ordenes_db
+      ROOT_PATH: /api/ordenes
+
+  inventario:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: inventario } }
+    environment:
+      <<: *env
+      DATABASE_URL: postgresql+psycopg://taller:taller@postgres:5432/inventario_db
+      ROOT_PATH: /api/inventario
+
+  facturacion:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: facturacion } }
+    environment:
+      <<: *env
+      DATABASE_URL: postgresql+psycopg://taller:taller@postgres:5432/facturacion_db
+      ROOT_PATH: /api/facturacion
+      TAX_RATE: "0.19"
+
+  notificaciones:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: notificaciones } }
+    environment:
+      <<: *env
+      DATABASE_URL: postgresql+psycopg://taller:taller@postgres:5432/notificaciones_db
+      ROOT_PATH: /api/notificaciones
+
+  # API Gateway (Nginx): sirve el frontend y enruta /api/<servicio>/ a cada microservicio
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - auth
+      - clientes
+      - mecanicos
+      - servicios
+      - ordenes
+      - inventario
+      - facturacion
+      - notificaciones
+
+volumes:
+  pgdata:

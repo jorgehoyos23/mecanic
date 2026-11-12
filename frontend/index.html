@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mecasolic</title>
+  <meta name="description" content="Mecasolic · Plataforma inteligente de gestión de taller mecánico">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><path d='M32 3 58 18v28L32 61 6 46V18z' fill='%23f97316'/><path d='M20 42V22l12 12 12-12v20' fill='none' stroke='%23fff' stroke-width='5' stroke-linejoin='round'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Degradados y filtros compartidos por todas las ilustraciones SVG -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="gNeon" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#4b5563"/><stop offset="1" stop-color="#374151"/>
+      </linearGradient>
+      <linearGradient id="gHot" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#fb8a3c"/><stop offset="1" stop-color="#ea580c"/>
+      </linearGradient>
+      <linearGradient id="gFill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fed7aa" stop-opacity=".9"/><stop offset="1" stop-color="#fff7ed" stop-opacity=".9"/>
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <!-- Pantalla de carga 0 → 100 % -->
+  <div id="boot" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Cargando Mecasolic">
+    <div class="boot-core">
+      <div class="boot-emblem">
+        <span class="ring r1"></span>
+        <svg viewBox="0 0 64 64" class="boot-logo"><path d="M32 3 58 18v28L32 61 6 46V18z" fill="#f97316"/><path d="M20 42V22l12 12 12-12v20" fill="none" stroke="#fff" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      </div>
+      <h1 class="boot-title">MECASOLIC</h1>
+      <p class="boot-sub">Gestión inteligente de taller</p>
+      <div class="boot-pct"><span id="boot-num">0</span><small>%</small></div>
+      <div class="boot-bar"><div id="boot-fill"></div></div>
+      <p class="boot-msg" id="boot-msg">Iniciando sistema…</p>
+      <div class="boot-chips" id="boot-chips"></div>
+    </div>
+  </div>
+
+  <div id="app"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <script src="assets.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
