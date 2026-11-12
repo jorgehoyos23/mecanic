@@ -503,9 +503,27 @@ function renderRegister() {
   bindEye(f);
   f.onsubmit = async (e) => {
     e.preventDefault();
-    await act(async () => { saveSession(await api('auth', '/register', { body: formValues(f) })); go('vehiculos'); },
+    const ok = await act(async () => { saveSession(await api('auth', '/register', { body: formValues(f) })); go('vehiculos'); },
       '¡Bienvenido a Mecasolic! Registra tu primer vehículo.');
+    if (ok) privacyNotice();
   };
+}
+
+/** Anuncio que se muestra al crear la cuenta: cómo protegemos los datos personales. */
+function privacyNotice() {
+  const { close } = modal('Tus datos están protegidos', `<div class="privacy-notice">
+      <div class="privacy-icon">${ico('lock')}</div>
+      <p><b>¡Tu cuenta fue creada con éxito, ${firstName()}!</b></p>
+      <p class="muted">En Mecasolic tus datos personales se guardan de forma segura y con total privacidad:</p>
+      <ul>
+        <li>${ico('check')} Tu contraseña se guarda <b>cifrada</b>: nadie, ni siquiera el taller, puede verla.</li>
+        <li>${ico('check')} La información viaja por una <b>conexión segura (HTTPS)</b>.</li>
+        <li>${ico('check')} Solo tú y el personal del taller ven tus datos y los de tus vehículos.</li>
+        <li>${ico('check')} <b>No compartimos ni vendemos</b> tu información a terceros.</li>
+      </ul>
+      <button type="button" class="btn primary block" data-ok>${ico('check')} Entendido</button>
+    </div>`);
+  document.querySelector('.privacy-notice [data-ok]').addEventListener('click', close);
 }
 
 // ------------------------------------------------------------------ componentes
