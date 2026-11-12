@@ -1,0 +1,21 @@
+# Blueprint de Render: en el panel de Render -> New -> Blueprint -> elige este repositorio.
+services:
+  - type: web
+    name: mecasolic
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/auth/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mecasolic-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+
+databases:
+  - name: mecasolic-db
+    plan: free
+    databaseName: mecasolic
+    user: mecasolic
