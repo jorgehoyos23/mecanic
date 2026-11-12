@@ -92,6 +92,11 @@ def seed(db: Session):
                     password_hash=hash_password(os.getenv("ADMIN_PASSWORD", "admin123"))))
         db.commit()
         log.info("Usuario administrador creado: %s", email)
+    # nombre anterior a la marca Mecasolic
+    old = db.scalar(select(User).where(User.email == email, User.full_name == "Administrador del Taller"))
+    if old:
+        old.full_name = "Administrador Mecasolic"
+        db.commit()
 
 
 app = create_app("Usuarios y Autenticación", "Registro, inicio de sesión, emisión de JWT y gestión de usuarios.", seed=seed)

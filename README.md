@@ -133,6 +133,31 @@ taller-mecanico/
 | GET | `/api/facturacion/invoices` · POST `/invoices/{id}/pay` | cliente, admin |
 | GET | `/api/notificaciones/notifications/me` | todos |
 
+## Horario de atención
+
+El taller recibe solicitudes de servicio de **7:00 a. m. a 10:00 p. m.** (hora de Colombia).
+Fuera de ese horario el servicio de Órdenes rechaza nuevas solicitudes (409) y la web muestra el aviso
+"Taller cerrado"; a las 7:00 a. m. vuelve a habilitarse sola. Consultar órdenes, aprobar cotizaciones y pagar
+facturas funciona a cualquier hora.
+
+- Consulta pública: `GET /api/ordenes/schedule`
+- Configuración (variables de entorno del servicio `ordenes`): `HORA_APERTURA=7`, `HORA_CIERRE=22`,
+  `TALLER_TZ=America/Bogota`. Para pruebas: `HORARIO_FORZAR=abierto|cerrado`.
+
+## Facturación automática
+
+Cuando el mecánico marca la orden como **FINALIZADA** se genera la factura automáticamente (con IVA, datos del
+cliente, vehículo, mecánico y diagnóstico), se notifica al cliente y se abre la factura en pantalla. Desde la
+orden o desde *Facturas* se puede **imprimir o guardar como PDF**. Los datos del taller que salen en la factura
+(NIT, dirección, teléfono) se configuran en la constante `TALLER` de `frontend/app.js`.
+
+## Fotos de productos y servicios
+
+Los repuestos y servicios de demostración usan fotos reales de **Wikimedia Commons** con licencias libres
+(dominio público, CC BY y CC BY-SA). Cada foto muestra su crédito y enlaza a su fuente y licencia
+(`services/inventario/app/fotos.py` y `services/servicios/app/fotos.py`). Si una foto no carga, se muestra una
+ilustración. El administrador puede asignar la URL de foto a nuevos servicios y repuestos.
+
 ## Posibles mejoras
 
 - Mensajería asíncrona (RabbitMQ o Kafka) para los eventos de la orden y las notificaciones.

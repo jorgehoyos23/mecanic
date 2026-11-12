@@ -12,6 +12,7 @@ from common.clients import notify
 from common.db import get_db
 from common.security import ROLE_ADMIN, STAFF, internal_only, require_roles
 
+from .fotos import ANTERIORES, FOTOS
 from .models import Part, StockMovement
 
 DEMO_PARTS = [
@@ -35,6 +36,11 @@ def seed(db: Session):
             p.movements.append(StockMovement(type="ENTRADA", quantity=stock, note="Inventario inicial"))
             db.add(p)
         db.commit()
+    # fotos reales para los repuestos de demostración que aún no tienen imagen
+    for p in db.scalars(select(Part).where(or_(Part.image_url.is_(None), Part.image_url.in_(ANTERIORES)),
+                                          Part.sku.in_(FOTOS))):
+        p.image_url, p.image_credit, p.image_source = FOTOS[p.sku]
+    db.commit()
 
 
 app = create_app("Inventario de Repuestos", "Catálogo de repuestos, existencias y movimientos de stock.", seed=seed)
@@ -49,6 +55,9 @@ class PartIn(BaseModel):
     unit_price: float = Field(ge=0)
     stock: int = Field(default=0, ge=0)
     min_stock: int = Field(default=0, ge=0)
+    image_url: str | None = None
+    image_credit: str | None = None
+    image_source: str | None = None
 
 
 class PartUpdate(BaseModel):
@@ -58,6 +67,9 @@ class PartUpdate(BaseModel):
     unit_price: float | None = Field(default=None, ge=0)
     min_stock: int | None = Field(default=None, ge=0)
     active: bool | None = None
+    image_url: str | None = None
+    image_credit: str | None = None
+    image_source: str | None = None
 
 
 class PartOut(BaseModel):
@@ -71,6 +83,9 @@ class PartOut(BaseModel):
     stock: int
     min_stock: int
     active: bool
+    image_url: str | None = None
+    image_credit: str | None = None
+    image_source: str | None = None
     low_stock: bool = False
 
 

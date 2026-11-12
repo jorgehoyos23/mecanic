@@ -18,6 +18,9 @@ class Part(Base):
     stock: Mapped[int] = mapped_column(Integer, default=0)
     min_stock: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    image_credit: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    image_source: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     movements: Mapped[list["StockMovement"]] = relationship(back_populates="part")

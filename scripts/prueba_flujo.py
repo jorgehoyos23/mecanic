@@ -37,6 +37,10 @@ def main():
     print(f"Probando flujo completo contra {BASE}\n")
     n = random.randint(1000, 9999)
 
+    # 0. Horario de atención: de 10:00 p. m. a 7:00 a. m. no se reciben solicitudes
+    horario = api("GET", "ordenes", "/schedule")
+    step(f"Horario {horario['hours_label']} · taller {'ABIERTO' if horario['open'] else 'CERRADO'}")
+
     # 1. Cliente se registra y registra su vehículo
     reg = api("POST", "auth", "/register", {"full_name": f"Cliente Prueba {n}", "email": f"cliente{n}@correo.com",
                                             "password": "secreto1", "phone": "3000000000"})
@@ -51,6 +55,14 @@ def main():
     # 2. Solicita un servicio de reparación
     catalog = api("GET", "servicios", "/catalog")
     frenos = next(s for s in catalog if "frenos" in s["name"].lower())
+    assert frenos["image_url"], "los servicios deben tener foto"
+    if not horario["open"]:
+        r = api("POST", "ordenes", "/orders", {"vehicle_id": veh["id"], "kind": "REPARACION",
+                                               "description": "Prueba fuera de horario"}, tc, expect=409)
+        step(f"Fuera de horario la solicitud se rechaza (409): {r['detail']}")
+        print("\nEl resto del flujo requiere el taller abierto (7:00 a. m. – 10:00 p. m.).")
+        print("Para probarlo de noche, inicia los servicios con HORARIO_FORZAR=abierto.")
+        return
     order = api("POST", "ordenes", "/orders", {"vehicle_id": veh["id"], "service_id": frenos["id"], "kind": "REPARACION",
                                                "description": "Chirrido al frenar y pedal esponjoso", "mileage": 45200}, tc)
     oid = order["id"]
@@ -92,6 +104,7 @@ def main():
     detail = api("POST", "ordenes", f"/orders/{oid}/status", {"status": "FINALIZADA", "note": "Listo."}, tm)
     inv = detail["invoice"]
     assert detail["status"] == "FINALIZADA" and inv["status"] == "PENDIENTE"
+    assert inv["client_email"] == reg["user"]["email"] and inv["mechanic_name"] == "Carlos Ramírez"
     step(f"Orden finalizada; factura {inv['number']} por ${inv['total']:,.0f} (IVA incluido)")
 
     # 7. Entrega bloqueada hasta el pago; el cliente paga

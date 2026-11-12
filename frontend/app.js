@@ -10,7 +10,11 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
   del(k) { try { localStorage.removeItem(k); } catch { /* sin almacenamiento */ } },
 };
-const S = { token: store.get('token'), user: store.get('user'), unread: 0, poll: null, clock: null, health: {} };
+const S = { token: store.get('token'), user: store.get('user'), unread: 0, poll: null, clock: null, health: {},
+  schedule: null, catalog: null };
+
+// Datos del taller que aparecen en la factura (complétalos con la información real del negocio)
+const TALLER = { nombre: 'Mecasolic', lema: 'Taller mecánico inteligente', nit: '', direccion: '', telefono: '', email: '' };
 
 const SVCS = ['auth', 'clientes', 'mecanicos', 'servicios', 'ordenes', 'inventario', 'facturacion', 'notificaciones'];
 const SVC_LABEL = { auth: 'Autenticación', clientes: 'Clientes', mecanicos: 'Mecánicos', servicios: 'Servicios',
@@ -89,6 +93,68 @@ const progressOf = (st) => (st === 'CANCELADA' ? 0 : Math.round((Math.max(0, FLO
 const thumb = (svg, cls = '') => `<span class="thumb ${cls}">${svg}</span>`;
 const orderArt = (o) => (o.service_name ? serviceArt({ name: o.service_name }) : o.kind === 'REPARACION' ? 'motor' : 'diagnostico');
 
+/** Foto real del producto/servicio; si no tiene o no carga, muestra la ilustración. */
+function photo(obj, artKey, { credit = true } = {}) {
+  if (!obj?.image_url) return art(artKey);
+  return `<img class="photo" src="${esc(obj.image_url)}" alt="${esc(obj.name || '')}" loading="lazy" referrerpolicy="no-referrer"
+      onerror="this.parentElement.classList.add('no-photo');this.remove()">
+    <span class="fallback-art">${art(artKey)}</span>
+    ${credit && obj.image_credit ? `<a class="credit" href="${esc(obj.image_source || '#')}" target="_blank" rel="noopener"
+      title="Ver fuente y licencia" onclick="event.stopPropagation()">Foto: ${esc(obj.image_credit)}</a>` : ''}`;
+}
+
+/** Miniatura de una orden: foto del servicio solicitado (o ilustración). */
+function orderThumb(o, cls = 'sm') {
+  const svc = (S.catalog || []).find((s) => s.id === o.service_id);
+  return thumb(photo(svc, orderArt(o), { credit: false }), cls);
+}
+
+async function ensureCatalog() {
+  if (S.catalog) return S.catalog;
+  try { S.catalog = await api('servicios', '/catalog?include_inactive=true'); } catch { S.catalog = []; }
+  return S.catalog;
+}
+
+// ------------------------------------------------------------------ horario de atención
+async function refreshSchedule() {
+  try {
+    const r = await fetch('/api/ordenes/schedule');
+    if (!r.ok) return;
+    const prev = S.schedule;
+    S.schedule = await r.json();
+    renderSchedule();
+    if (prev && prev.open !== S.schedule.open) {
+      toast(S.schedule.open ? '☀️ ¡Ya hay servicio! El taller abrió y puedes solicitar servicios.'
+        : `🌙 El taller cerró. No hay servicios hasta las ${hourLabel(S.schedule.open_hour)}`, S.schedule.open ? 'success' : 'error');
+      const route = location.hash.replace(/^#\/?/, '').split('/')[0];
+      if (['solicitar', 'inicio', 'ordenes'].includes(route)) router();
+    }
+    // vuelve a consultar justo cuando cambie el estado (apertura o cierre)
+    clearTimeout(S.schedTimer);
+    const ms = new Date(S.schedule.next_change) - new Date(S.schedule.now) + 2000;
+    if (ms > 0 && ms < 864e5) S.schedTimer = setTimeout(refreshSchedule, ms);
+  } catch { /* sin conexión */ }
+}
+const hourLabel = (h) => `${(h - 1) % 12 + 1}:00 ${h < 12 ? 'a. m.' : 'p. m.'}`;
+const isOpen = () => S.schedule?.open !== false;
+
+function renderSchedule() {
+  const s = S.schedule;
+  if (!s) return;
+  const pill = $('#sched-pill');
+  if (pill) {
+    pill.className = `sched-pill ${s.open ? 'open' : 'closed'}`;
+    pill.innerHTML = s.open ? `<span class="dot"></span>Abierto · hasta ${hourLabel(s.close_hour)}`
+      : `<span class="dot"></span>Cerrado · abre ${hourLabel(s.open_hour)}`;
+  }
+  const banner = $('#sched-banner');
+  if (banner) {
+    banner.hidden = s.open;
+    banner.innerHTML = s.open ? '' : `<span class="moon">🌙</span><div><b>Taller cerrado: no hay servicios disponibles en este momento.</b>
+      <span>Atendemos de ${s.hours_label}; podrás solicitar servicios nuevamente a partir de las ${hourLabel(s.open_hour)}</span></div>`;
+  }
+}
+
 function toast(msg, type = 'info') {
   const el = document.createElement('div');
   el.className = `toast ${type}`;
@@ -136,7 +202,7 @@ async function fetchHealth(svc, timeout = 5000) {
 }
 
 async function refreshHealth() {
-  const results = await Promise.all(SVCS.map(fetchHealth));
+  const results = await Promise.all(SVCS.map((s) => fetchHealth(s)));
   SVCS.forEach((s, i) => { S.health[s] = results[i]; });
   updateSysPill();
   return S.health;
@@ -205,6 +271,7 @@ async function boot() {
   const chips = $('#boot-chips');
   chips.innerHTML = SVCS.map((s) => `<span data-s="${s}">${s}</span>`).join('');
 
+  const extras = Promise.all([refreshSchedule(), ensureCatalog()]);
   let done = 0;
   SVCS.forEach((s) => fetchHealth(s).then((h) => {
     S.health[s] = h;
@@ -232,6 +299,7 @@ async function boot() {
     };
     requestAnimationFrame(frame);
   });
+  await extras;
   const ok = SVCS.filter((s) => S.health[s]).length;
   msg.textContent = ok === SVCS.length
     ? `✔ ${ok}/${SVCS.length} servicios en línea · Base de datos ${dbEngine()}`
@@ -266,9 +334,11 @@ async function router() {
   const r = allowed.includes(route) ? route : 'inicio';
   if (r !== route) return go(r);
   renderShell(r);
+  document.title = `${$('#title').textContent} · Mecasolic`;
   const view = $('#view');
   view.innerHTML = '<div class="loading">Cargando datos…</div>';
   try {
+    await ensureCatalog();
     await VIEWS[r](view, param && decodeURIComponent(param));
     view.style.animation = 'none'; void view.offsetWidth; view.style.animation = '';
     countUp(view);
@@ -300,11 +370,14 @@ function renderShell(active) {
       <div class="main">
         <header class="topbar">
           <div class="actions"><button class="icon-btn menu-btn" id="menu" aria-label="Menú">☰</button><h3 id="title"></h3></div>
-          <div class="top-right"><span class="sys-pill"><span class="dot"></span>conectando…</span>
+          <div class="top-right"><span id="sched-pill" class="sched-pill"></span><span class="sys-pill"><span class="dot"></span>conectando…</span>
             <span class="clock" id="clock"></span>
             <a class="bell" href="#/notificaciones" title="Notificaciones">${ico('bell')}<span class="count" hidden></span></a></div>
         </header>
+        <div class="sched-banner" id="sched-banner" hidden></div>
         <section class="view" id="view"></section>
+        <footer class="footer">© ${new Date().getFullYear()} Mecasolic · Taller mecánico inteligente
+          <span>Horario de atención: ${S.schedule?.hours_label || '7:00 a. m. – 10:00 p. m.'}</span></footer>
       </div>
     </div>`;
     $('#logout').onclick = logout;
@@ -314,6 +387,7 @@ function renderShell(active) {
     clearInterval(S.clock);
     S.clock = setInterval(tick, 1000);
     updateSysPill();
+    renderSchedule();
     if (!Object.keys(S.health).length) refreshHealth();
     startPolling();
   }
@@ -350,19 +424,21 @@ function startPolling() {
 
 // ------------------------------------------------------------------ autenticación
 function authLayout(inner) {
+  const svc = (re) => (S.catalog || []).find((s) => re.test(s.name));
+  const main = svc(/mantenimiento/i);
+  const orbit = (cls, re, key) => `<div class="orbit ${cls}">${photo(svc(re), key, { credit: false })}</div>`;
   $('#app').innerHTML = `<div class="auth">
     <section class="auth-hero">
       ${brand('Smart Workshop Platform')}
-      <div class="hero-visual">
-        <div class="car">${art('vehiculo')}</div>
-        <div class="scan"></div>
-        <div class="orbit o1">${art('motor')}</div>
-        <div class="orbit o2">${art('disco')}</div>
-        <div class="orbit o3">${art('bateria')}</div>
-        <div class="orbit o4">${art('diagnostico')}</div>
+      <div class="hero-visual ${main?.image_url ? 'has-photo' : ''}">
+        <div class="car">${photo(main, 'vehiculo')}</div>
+        ${orbit('o1', /motor/i, 'motor')}
+        ${orbit('o2', /frenos/i, 'disco')}
+        ${orbit('o3', /bater/i, 'bateria')}
+        ${orbit('o4', /diagn/i, 'diagnostico')}
       </div>
       <div class="hero-copy">
-        <h1>Tu taller, <span>en modo futuro.</span></h1>
+        <h1>Tu vehículo en buenas manos, <span>en tiempo real.</span></h1>
         <p>Registra tu vehículo, solicita servicios, aprueba cotizaciones y sigue cada reparación en tiempo real.</p>
         <div class="hero-feats">
           <div><b>8</b><span>microservicios conectados</span></div>
@@ -371,8 +447,10 @@ function authLayout(inner) {
         </div>
       </div>
     </section>
-    <section class="auth-side"><div class="card auth-card corner">${inner}</div></section>
+    <section class="auth-side"><div class="card auth-card corner"><span id="sched-pill" class="sched-pill"></span>${inner}</div></section>
   </div>`;
+  document.title = 'Mecasolic · Taller mecánico inteligente';
+  renderSchedule();
 }
 
 const field = (icon, input) => `<div class="input-icon">${ico(icon)}${input}</div>`;
@@ -390,7 +468,7 @@ function renderLogin() {
     <p class="muted">Ingresa tus credenciales para continuar.</p>
     <form class="form" id="f">
       <label class="field">Correo electrónico${field('mail', '<input name="email" type="email" required autocomplete="username" placeholder="tu@correo.com">')}</label>
-      <label class="field">Contraseña${field('lock', '<input name="password" type="password" required autocomplete="current-password" placeholder="••••••••"><button type="button" class="eye">VER</button>')}</label>
+      <label class="field">Contraseña${field('lock', '<input name="password" type="password" required autocomplete="current-password" placeholder="Tu contraseña"><button type="button" class="eye">VER</button>')}</label>
       <button class="btn primary block">${ico('bolt')} Ingresar</button>
     </form>
     <p class="auth-alt">¿No tienes cuenta? <a href="#/registro">Regístrate gratis</a></p>
@@ -440,7 +518,7 @@ function ordersTable(orders, { showClient = true } = {}) {
   if (!orders.length) return '<div class="empty">No hay órdenes para mostrar.</div>';
   return `<div class="table-wrap"><table><thead><tr><th>Orden</th>${showClient ? '<th>Cliente</th>' : ''}<th>Vehículo</th>
     <th>Servicio</th><th>Mecánico</th><th>Estado</th><th>Actualizada</th></tr></thead><tbody>
-    ${orders.map((o) => `<tr class="clickable" data-go="orden/${o.id}"><td><div class="cell-flex">${thumb(art(orderArt(o)), 'sm')}<b class="mono">${esc(o.code)}</b></div></td>
+    ${orders.map((o) => `<tr class="clickable" data-go="orden/${o.id}"><td><div class="cell-flex">${orderThumb(o)}<b class="mono">${esc(o.code)}</b></div></td>
       ${showClient ? `<td>${esc(o.client_name)}</td>` : ''}<td>${esc(o.vehicle_label)}</td>
       <td>${esc(o.service_name || (o.kind === 'REPARACION' ? 'Reparación' : 'Mantenimiento'))}</td>
       <td>${esc(o.mechanic_name || '—')}</td><td>${badge(o.status)}</td><td class="small muted">${fdate(o.updated_at)}</td></tr>`).join('')}
@@ -449,7 +527,7 @@ function ordersTable(orders, { showClient = true } = {}) {
 
 function miniOrders(orders) {
   if (!orders.length) return '<div class="empty">Sin órdenes en curso.</div>';
-  return orders.map((o) => `<div class="mini-order" data-go="orden/${o.id}">${thumb(art(orderArt(o)), 'sm')}
+  return orders.map((o) => `<div class="mini-order" data-go="orden/${o.id}">${orderThumb(o)}
     <div><b>${esc(o.code)}</b> <span class="muted small">· ${esc(o.vehicle_label)}</span>
       <div class="meter ${o.status === 'COTIZADA' ? 'hot' : ''}"><i style="width:${progressOf(o.status)}%"></i></div></div>
     ${badge(o.status)}</div>`).join('');
@@ -499,6 +577,67 @@ function itemsTable(items, { subtotal, tax, total, taxRate } = {}) {
     </tfoot></table></div>`;
 }
 
+/** Documento HTML de la factura, listo para imprimir o guardar como PDF. */
+function invoiceDocument(inv) {
+  const paid = inv.status === 'PAGADA';
+  const pay = inv.payments[0];
+  const row = (l, v) => (v ? `<tr><th>${l}</th><td>${esc(v)}</td></tr>` : '');
+  const taller = [TALLER.nit && `NIT ${TALLER.nit}`, TALLER.direccion, TALLER.telefono, TALLER.email].filter(Boolean).map(esc).join(' · ');
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Factura ${esc(inv.number)} · Mecasolic</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;font-family:Inter,"Segoe UI",Arial,sans-serif;color:#1f2328;background:#f5f5f5;font-size:13px}
+    .page{max-width:800px;margin:24px auto;background:#fff;padding:42px 46px;border-top:8px solid #f97316;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+    .top{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
+    .brand{display:flex;gap:12px;align-items:center}.brand svg{width:48px;height:48px}
+    .brand b{font-size:24px;letter-spacing:.08em;display:block}.brand span{color:#6b7280;font-size:12px}
+    .doc{text-align:right}.doc h1{margin:0;font-size:20px;color:#ea580c;letter-spacing:.04em}.doc .n{font-size:16px;font-weight:700;margin-top:4px}
+    .doc .st{display:inline-block;margin-top:8px;padding:4px 12px;border-radius:99px;font-weight:700;font-size:12px;
+      ${paid ? 'background:#ecfdf3;color:#15803d;border:1px solid #bbf7d0' : 'background:#fff1e6;color:#c2410c;border:1px solid #fed7aa'}}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:28px 0 22px}
+    .box{border:1px solid #ececec;border-radius:10px;padding:14px 16px}.box h3{margin:0 0 8px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#ea580c}
+    .box table th{text-align:left;color:#6b7280;font-weight:500;padding:2px 12px 2px 0;white-space:nowrap;vertical-align:top}.box table td{padding:2px 0}
+    table.items{width:100%;border-collapse:collapse}table.items th{background:#f97316;color:#fff;text-align:left;padding:9px 10px;font-size:11.5px;letter-spacing:.04em}
+    table.items td{padding:9px 10px;border-bottom:1px solid #f0f0f0}table.items .r{text-align:right;white-space:nowrap}
+    .tot{margin-left:auto;width:300px;margin-top:14px}.tot div{display:flex;justify-content:space-between;padding:5px 0}
+    .tot .g{border-top:2px solid #f97316;margin-top:6px;padding-top:10px;font-size:18px;font-weight:800;color:#ea580c}
+    .diag{margin-top:22px;background:#fafafa;border-left:4px solid #f97316;padding:12px 14px;border-radius:6px;white-space:pre-wrap}
+    .foot{margin-top:30px;padding-top:14px;border-top:1px solid #ececec;color:#6b7280;font-size:11.5px;text-align:center}
+    .bar{max-width:800px;margin:16px auto 0;display:flex;gap:8px;justify-content:flex-end}
+    .bar button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:10px 16px;cursor:pointer;background:#f97316;color:#fff}
+    .bar button.sec{background:#fff;color:#1f2328;border:1px solid #e5e5e5}
+    @media print{body{background:#fff}.page{box-shadow:none;margin:0;max-width:none;padding:24px}.bar{display:none}}
+  </style></head><body>
+  <div class="bar"><button class="sec" onclick="window.close()">Cerrar</button><button onclick="window.print()">Imprimir / Guardar como PDF</button></div>
+  <div class="page">
+    <div class="top">
+      <div class="brand">${LOGO.replace('aria-hidden="true"', 'xmlns="http://www.w3.org/2000/svg"')}<div><b>${esc(TALLER.nombre.toUpperCase())}</b><span>${esc(TALLER.lema)}</span>${taller ? `<br><span>${taller}</span>` : ''}</div></div>
+      <div class="doc"><h1>FACTURA DE VENTA</h1><div class="n">${esc(inv.number)}</div><div class="st">${paid ? 'PAGADA' : inv.status}</div></div>
+    </div>
+    <div class="grid">
+      <div class="box"><h3>Cliente</h3><table>${row('Nombre', inv.client_name)}${row('Documento', inv.client_document)}
+        ${row('Correo', inv.client_email)}${row('Teléfono', inv.client_phone)}${row('Dirección', inv.client_address)}</table></div>
+      <div class="box"><h3>Servicio</h3><table>${row('Orden', inv.order_code)}${row('Vehículo', inv.vehicle_label)}
+        ${row('Servicio', inv.service_name)}${row('Mecánico', inv.mechanic_name)}${row('Emisión', fdate(inv.issued_at))}
+        ${paid ? row('Pago', `${fdate(inv.paid_at)} · ${pay?.method || ''} · ${pay?.reference || ''}`) : ''}</table></div>
+    </div>
+    <table class="items"><thead><tr><th>Concepto</th><th>Tipo</th><th class="r">Cant.</th><th class="r">Precio unit.</th><th class="r">Subtotal</th></tr></thead><tbody>
+      ${inv.items.map((i) => `<tr><td>${esc(i.description)}</td><td>${KIND[i.kind] || esc(i.kind)}</td><td class="r">${i.quantity}</td>
+        <td class="r">${money(i.unit_price)}</td><td class="r">${money(i.subtotal)}</td></tr>`).join('')}</tbody></table>
+    <div class="tot"><div><span>Subtotal</span><b>${money(inv.subtotal)}</b></div>
+      <div><span>IVA (${Math.round(inv.tax_rate * 100)}%)</span><b>${money(inv.tax)}</b></div>
+      <div class="g"><span>TOTAL</span><span>${money(inv.total)}</span></div></div>
+    ${inv.diagnosis ? `<div class="diag"><b>Diagnóstico y trabajo realizado</b><br>${esc(inv.diagnosis)}</div>` : ''}
+    <div class="foot">Gracias por confiar en ${esc(TALLER.nombre)}. Documento generado el ${fdate(new Date().toISOString())}</div>
+  </div></body></html>`;
+}
+
+function printInvoice(inv) {
+  const w = window.open('', '_blank');
+  if (!w) return toast('Tu navegador bloqueó la ventana. Permite las ventanas emergentes para ver la factura.', 'error');
+  w.document.write(invoiceDocument(inv));
+  w.document.close();
+}
+
 function invoiceModal(inv, onChange) {
   const canPay = inv.status === 'PENDIENTE' && ['cliente', 'admin'].includes(role());
   const body = `<dl class="kv"><dt>Factura</dt><dd><span class="mono">${esc(inv.number)}</span> <span class="badge ${INVOICE_CLS[inv.status]}">${inv.status}</span></dd>
@@ -510,8 +649,9 @@ function invoiceModal(inv, onChange) {
     ${canPay ? `<div class="form mt"><label class="field">Medio de pago
       <select name="method"><option value="TARJETA">Tarjeta</option><option value="TRANSFERENCIA">Transferencia</option>
       <option value="EFECTIVO">Efectivo</option></select></label></div>` : ''}`;
-  modal(`Factura ${inv.number}`, body, {
+  modal(`Factura ${inv.number}`, `${body}<div class="actions mt"><button type="button" class="btn" data-print>🖨 Imprimir / Descargar PDF</button></div>`, {
     wide: true, submit: `Pagar ${money(inv.total)}`,
+    onOpen: (form) => { $('[data-print]', form).onclick = () => printInvoice(inv); },
     onSubmit: canPay ? async (v) => {
       await api('facturacion', `/invoices/${inv.id}/pay`, { body: { method: v.method } });
       toast('Pago registrado correctamente', 'success');
@@ -567,7 +707,7 @@ async function homeMechanic(view) {
   view.innerHTML = `<div class="page-head"><div><h1>Centro de control</h1><div class="sub">Hola, ${firstName()} · tablero de trabajo del día</div></div></div>
     <div class="grid cols-4">${cols.map(([st, l, i], n) => kpi(l, by(st).length, i, { tone: ['', 'hot', 'green', 'violet'][n] })).join('')}</div>
     <div class="kanban mt">${cols.map(([st, l]) => `<div class="card col"><h2>${l} <b>${by(st).length}</b></h2>
-      ${by(st).map((o) => `<div class="task" data-go="orden/${o.id}"><div class="cell-flex">${thumb(art(orderArt(o)), 'sm')}<b>${esc(o.code)}</b></div>
+      ${by(st).map((o) => `<div class="task" data-go="orden/${o.id}"><div class="cell-flex">${orderThumb(o)}<b>${esc(o.code)}</b></div>
         <span>${esc(o.vehicle_label)}</span><small>${esc(o.description).slice(0, 80)}</small></div>`).join('') || '<div class="empty small" style="padding:20px 0">Vacío</div>'}
     </div>`).join('')}</div>`;
   bindRowLinks(view);
@@ -606,7 +746,7 @@ async function homeAdmin(view) {
       <div class="card"><div class="card-head"><h2>Solicitudes sin asignar</h2><span class="badge gray">${b.SOLICITADA}</span></div>
         ${miniOrders(orders.filter((o) => o.status === 'SOLICITADA').slice(0, 6))}</div>
       <div class="card"><div class="card-head"><h2>Inventario crítico</h2><a href="#/inventario" class="small">Inventario →</a></div>
-        <div class="bars">${critical.map((p) => `<div class="bar-row">${thumb(art(partArt(p)), 'sm')}<div>
+        <div class="bars">${critical.map((p) => `<div class="bar-row">${thumb(photo(p, partArt(p), { credit: false }), 'sm')}<div>
           <div class="top"><span>${esc(p.name)}</span><span>${p.stock} / mín ${p.min_stock}</span></div>
           <div class="meter ${p.low_stock ? 'low' : ''}"><i style="width:${Math.min(100, (p.stock / Math.max(1, p.min_stock * 3)) * 100)}%"></i></div></div></div>`).join('')}</div></div>
     </div>
@@ -622,7 +762,7 @@ async function homeAdmin(view) {
 
 // ------------------------------------------------------------------ vistas: vehículos (cliente)
 const vehicleForm = (extra = '') => `<div class="form">${extra}
-  <div class="row"><label class="field">Placa<input name="plate" required maxlength="15" placeholder="ABC123"></label>
+  <div class="row"><label class="field">Placa<input name="plate" required maxlength="15" placeholder="ABC123" style="text-transform:uppercase" autocomplete="off"></label>
   <label class="field">Año<input name="year" type="number" required min="1950" max="2100"></label></div>
   <div class="row"><label class="field">Marca<input name="brand" required placeholder="Toyota"></label>
   <label class="field">Modelo<input name="model" required placeholder="Corolla"></label></div>
@@ -649,11 +789,29 @@ VIEWS.vehiculos = async (view) => {
   });
 };
 
+function closedCard() {
+  const s = S.schedule;
+  return `<div class="card closed-card corner">
+    <div class="closed-ico">🌙</div>
+    <h1>No hay servicios disponibles en este momento</h1>
+    <p>El taller está cerrado entre las <b>${hourLabel(s.close_hour)}</b> y las <b>${hourLabel(s.open_hour)}</b>;
+      a partir de las <b>${hourLabel(s.open_hour)}</b> podrás solicitar tu servicio de mantenimiento o reparación.</p>
+    <div class="hours"><div><span>Apertura</span><b>${hourLabel(s.open_hour)}</b></div><div><span>Cierre</span><b>${hourLabel(s.close_hour)}</b></div></div>
+    <div class="actions" style="justify-content:center"><a class="btn" href="#/ordenes">Ver mis órdenes</a>
+      <a class="btn" href="#/vehiculos">Mis vehículos</a></div>
+    <p class="small muted">Puedes seguir consultando tus órdenes, cotizaciones y facturas a cualquier hora.</p></div>`;
+}
+
 // ------------------------------------------------------------------ vistas: solicitar servicio
 VIEWS.solicitar = async (view, vehicleId) => {
   const [vehicles, catalog] = await Promise.all([api('clientes', '/vehicles'), api('servicios', '/catalog')]);
   if (!vehicles.length) {
     view.innerHTML = '<div class="card empty">Primero debes <a href="#/vehiculos">registrar un vehículo</a>.</div>';
+    return;
+  }
+  await refreshSchedule();
+  if (!isOpen()) {
+    view.innerHTML = closedCard();
     return;
   }
   view.innerHTML = `<div class="page-head"><div><h1>Solicitar servicio</h1><div class="sub">Elige el vehículo, el servicio y cuéntanos qué necesitas</div></div></div>
@@ -675,7 +833,7 @@ VIEWS.solicitar = async (view, vehicleId) => {
     const opts = catalog.filter((s) => s.category === kind || s.category === 'DIAGNOSTICO');
     $('#svcs').innerHTML = `<label><input type="radio" name="service_id" value="" checked>${thumb(art('diagnostico'))}
         <b>No estoy seguro</b><span class="small muted">Un mecánico revisará el vehículo y te dará un diagnóstico.</span></label>` +
-      opts.map((s) => `<label><input type="radio" name="service_id" value="${s.id}">${thumb(art(serviceArt(s)))}
+      opts.map((s) => `<label><input type="radio" name="service_id" value="${s.id}">${thumb(photo(s, serviceArt(s), { credit: false }))}
         <b>${esc(s.name)}</b><span class="price">desde ${money(s.base_price)}</span>
         <span class="small muted">${esc(s.description)} · ${s.estimated_hours} h</span></label>`).join('');
   };
@@ -713,6 +871,7 @@ VIEWS.ordenes = async (view, vehicleId) => {
   $('#flt').onchange = draw;
   draw();
   $('#new')?.addEventListener('click', async () => {
+    if (!isOpen()) return toast(S.schedule.message, 'error');
     const [vehicles, catalog] = await Promise.all([api('clientes', '/vehicles'), api('servicios', '/catalog')]);
     modal('Nueva orden (cliente en mostrador)', `<div class="form">
       <label class="field">Vehículo<select name="vehicle_id" required>${vehicles.map((v) =>
@@ -745,7 +904,7 @@ VIEWS.orden = async (view, id) => {
   else if (o.status === 'RECHAZADA') banner = '<div class="banner red">La cotización fue rechazada. El mecánico puede proponer una nueva.</div>';
   else if (o.status === 'FINALIZADA') banner = `<div class="banner green">¡El servicio está terminado! ${inv?.status === 'PAGADA' ? 'Factura pagada; el vehículo está listo para entrega.' : 'Paga la factura para retirar el vehículo.'}</div>`;
 
-  view.innerHTML = `<div class="page-head"><div class="order-hero">${thumb(art(orderArt(o)))}<div>
+  view.innerHTML = `<div class="page-head"><div class="order-hero">${orderThumb(o, '')}<div>
       <h1><span class="mono">${esc(o.code)}</span> ${badge(o.status)}</h1>
       <div class="sub">${esc(o.vehicle_label)} · creada ${fdate(o.created_at)}</div></div></div>
       <a class="btn ghost" href="#/ordenes">← Volver</a></div>
@@ -836,8 +995,10 @@ VIEWS.orden = async (view, id) => {
     finish: () => modal('Finalizar trabajo', `<p>Se generará la factura y se notificará al cliente que el vehículo está listo.</p>
       <label class="field">Nota final (opcional)<textarea name="note" placeholder="Trabajos realizados, recomendaciones…"></textarea></label>`, {
       submit: 'Finalizar', onSubmit: async (v) => {
-        await api('ordenes', `/orders/${o.id}/status`, { body: { status: 'FINALIZADA', note: v.note || null } });
-        toast('Orden finalizada y factura generada', 'success'); reload();
+        const d = await api('ordenes', `/orders/${o.id}/status`, { body: { status: 'FINALIZADA', note: v.note || null } });
+        toast(`Orden finalizada. Factura ${d.invoice?.number || ''} generada automáticamente.`, 'success');
+        await reload();
+        if (d.invoice) invoiceModal(d.invoice, reload);
       },
     }),
     deliver: () => setStatus('ENTREGADA', 'Entrega registrada'),
@@ -869,7 +1030,7 @@ async function renderDiagnosisForm(container, o, done) {
     <form class="form" id="diag">
       <label class="field">Diagnóstico<textarea name="diagnosis" required minlength="5"
         placeholder="Hallazgos de la inspección y trabajos recomendados">${esc(o.diagnosis || '')}</textarea></label>
-      <div class="row"><label class="field">Entrega estimada<input type="date" name="estimated_delivery" value="${o.estimated_delivery || ''}"></label>
+      <div class="row"><label class="field">Entrega estimada<input type="date" name="estimated_delivery" min="${new Date().toLocaleDateString('en-CA')}" value="${o.estimated_delivery || ''}"></label>
         <label class="field">Notas para el cliente<input name="quote_notes" placeholder="Garantía, condiciones…"></label></div>
       <div><span class="small muted" style="letter-spacing:.06em;text-transform:uppercase;font-weight:600">Ítems de la cotización</span>
         <div class="items" id="items" style="margin-top:8px"></div>
@@ -953,13 +1114,18 @@ VIEWS.facturas = async (view) => {
       ${kpi('Facturas', invoices.length, 'receipt', { tone: 'violet' })}
     </div>
     <div class="card mt">${invoices.length ? `<div class="table-wrap"><table><thead><tr><th>Factura</th><th>Orden</th>
-      ${role() === 'admin' ? '<th>Cliente</th>' : ''}<th>Vehículo</th><th>Emitida</th><th class="right">Total</th><th>Estado</th></tr></thead><tbody>
+      ${role() === 'admin' ? '<th>Cliente</th>' : ''}<th>Vehículo</th><th>Emitida</th><th class="right">Total</th><th>Estado</th><th></th></tr></thead><tbody>
       ${invoices.map((i) => `<tr class="clickable" data-id="${i.id}"><td><b class="mono">${esc(i.number)}</b></td><td class="mono">${esc(i.order_code)}</td>
         ${role() === 'admin' ? `<td>${esc(i.client_name)}</td>` : ''}<td>${esc(i.vehicle_label)}</td><td class="small">${fdate(i.issued_at)}</td>
-        <td class="right mono">${money(i.total)}</td><td><span class="badge ${INVOICE_CLS[i.status]}">${i.status}</span></td></tr>`).join('')}
+        <td class="right mono">${money(i.total)}</td><td><span class="badge ${INVOICE_CLS[i.status]}">${i.status}</span></td>
+        <td class="right"><button class="btn sm" data-pdf="${i.id}">🖨 PDF</button></td></tr>`).join('')}
       </tbody></table></div>` : '<div class="empty">No hay facturas.</div>'}</div>`;
   $$('tr[data-id]', view).forEach((tr) => tr.onclick = () =>
     invoiceModal(invoices.find((i) => String(i.id) === tr.dataset.id), router));
+  $$('[data-pdf]', view).forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    printInvoice(invoices.find((i) => String(i.id) === b.dataset.pdf));
+  });
 };
 
 // ------------------------------------------------------------------ vistas: notificaciones
@@ -1062,12 +1228,17 @@ VIEWS.catalogo = async (view) => {
       `<option value="${k}" ${s.category === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     <label class="field">Precio base<input name="base_price" type="number" min="0" step="1000" required value="${s.base_price ?? ''}"></label>
     <label class="field">Horas estimadas<input name="estimated_hours" type="number" min="0.5" step="0.5" value="${s.estimated_hours ?? 1}"></label></div>
-    <label class="field">Estado<select name="active"><option value="true">Activo</option><option value="false" ${s.active === false ? 'selected' : ''}>Inactivo</option></select></label></div>`;
-  const body = (v) => ({ ...v, base_price: Number(v.base_price), estimated_hours: Number(v.estimated_hours), active: v.active === 'true' });
+    <label class="field">Estado<select name="active"><option value="true">Activo</option><option value="false" ${s.active === false ? 'selected' : ''}>Inactivo</option></select></label>
+    <label class="field">URL de la foto (opcional)<input name="image_url" type="url" value="${esc(s.image_url || '')}" placeholder="https://…/foto.jpg"></label>
+    <div class="row"><label class="field">Crédito de la foto<input name="image_credit" value="${esc(s.image_credit || '')}" placeholder="Autor · licencia"></label>
+    <label class="field">Fuente de la foto<input name="image_source" type="url" value="${esc(s.image_source || '')}"></label></div></div>`;
+  const body = (v) => ({ ...v, base_price: Number(v.base_price), estimated_hours: Number(v.estimated_hours), active: v.active === 'true',
+    image_url: v.image_url || null, image_credit: v.image_credit || null, image_source: v.image_source || null });
+  S.catalog = null; // se recarga con los cambios
   view.innerHTML = `<div class="page-head"><div><h1>Servicios del taller</h1><div class="sub">${list.length} servicios en el catálogo</div></div>
       <button class="btn primary" id="add">${ico('plus')} Nuevo servicio</button></div>
     <div class="products">${list.map((s) => `<div class="card product" style="${s.active ? '' : 'opacity:.55'}">
-      <div class="pic">${art(serviceArt(s))}<span class="badge ${{ MANTENIMIENTO: 'blue', REPARACION: 'purple', DIAGNOSTICO: 'teal' }[s.category]}">${CATEGORY[s.category]}</span></div>
+      <div class="pic">${photo(s, serviceArt(s))}<span class="badge ${{ MANTENIMIENTO: 'blue', REPARACION: 'purple', DIAGNOSTICO: 'teal' }[s.category]}">${CATEGORY[s.category]}</span></div>
       <h3>${esc(s.name)}</h3><div class="small muted">${esc(s.description)}</div>
       <div class="meta"><span class="price">${money(s.base_price)}</span><span class="mono">${s.estimated_hours} h</span></div>
       <div class="meta">${s.active ? '<span class="badge green">Activo</span>' : '<span class="badge gray">Inactivo</span>'}
@@ -1103,7 +1274,7 @@ VIEWS.inventario = async (view) => {
     const rows = parts.filter((p) => (!$('#low').checked || p.low_stock) &&
       (!q || [p.name, p.sku, p.brand || ''].some((x) => x.toLowerCase().includes(q))));
     $('#list').innerHTML = rows.length ? rows.map((p) => `<div class="card product">
-      <div class="pic">${art(partArt(p))}${p.low_stock ? '<span class="badge red">Stock bajo</span>' : `<span class="badge gray">${esc(p.category)}</span>`}</div>
+      <div class="pic">${photo(p, partArt(p))}${p.low_stock ? '<span class="badge red">Stock bajo</span>' : `<span class="badge gray">${esc(p.category)}</span>`}</div>
       <span class="sku">${esc(p.sku)} · ${esc(p.brand || '')}</span>
       <h3>${esc(p.name)}</h3>
       <div class="meta"><span class="price">${money(p.unit_price)}</span><span class="mono">${p.stock} und.</span></div>
@@ -1113,7 +1284,7 @@ VIEWS.inventario = async (view) => {
     </div>`).join('') : '<div class="card empty" style="grid-column:1/-1">Sin resultados.</div>';
     $$('[data-stock]', view).forEach((b) => b.onclick = () => {
       const p = parts.find((x) => String(x.id) === b.dataset.stock);
-      modal(`Movimiento de stock · ${p.name}`, `<div class="form"><div class="cell-flex">${thumb(art(partArt(p)))}<p class="muted" style="margin:0">Stock actual: <b class="hot">${p.stock}</b></p></div>
+      modal(`Movimiento de stock · ${p.name}`, `<div class="form"><div class="cell-flex">${thumb(photo(p, partArt(p), { credit: false }))}<p class="muted" style="margin:0">Stock actual: <b class="hot">${p.stock}</b></p></div>
         <div class="row"><label class="field">Tipo<select name="type"><option value="ENTRADA">Entrada (compra)</option><option value="AJUSTE">Ajuste (+/−)</option></select></label>
         <label class="field">Cantidad<input name="quantity" type="number" required step="1"></label></div>
         <label class="field">Nota<input name="note" placeholder="Factura proveedor, conteo físico…"></label></div>`, {
@@ -1143,9 +1314,12 @@ VIEWS.inventario = async (view) => {
       <label class="field">Precio unitario<input name="unit_price" type="number" min="0" step="100" required></label></div>
       <datalist id="cats">${[...new Set(parts.map((p) => p.category))].map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
       <div class="row"><label class="field">Stock inicial<input name="stock" type="number" min="0" value="0"></label>
-      <label class="field">Stock mínimo<input name="min_stock" type="number" min="0" value="0"></label></div></div>`, {
+      <label class="field">Stock mínimo<input name="min_stock" type="number" min="0" value="0"></label></div>
+      <label class="field">URL de la foto (opcional)<input name="image_url" type="url" placeholder="https://…/foto.jpg"></label>
+      <label class="field">Crédito de la foto<input name="image_credit" placeholder="Autor · licencia"></label></div>`, {
     onSubmit: async (v) => {
-      await api('inventario', '/parts', { body: { ...v, unit_price: Number(v.unit_price), stock: Number(v.stock), min_stock: Number(v.min_stock) } });
+      await api('inventario', '/parts', { body: { ...v, unit_price: Number(v.unit_price), stock: Number(v.stock), min_stock: Number(v.min_stock),
+        image_url: v.image_url || null, image_credit: v.image_credit || null } });
       toast('Repuesto creado', 'success'); router();
     },
   }));
@@ -1155,5 +1329,7 @@ VIEWS.inventario = async (view) => {
 window.addEventListener('hashchange', router);
 window.addEventListener('DOMContentLoaded', async () => {
   await boot();
+  if (!S.schedule) refreshSchedule();
+  setInterval(refreshSchedule, 60000); // revisa el horario cada minuto
   router();
 });

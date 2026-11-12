@@ -12,6 +12,7 @@ from common.clients import call
 from common.db import get_db, utcnow
 from common.security import ROLE_ADMIN, STAFF, CurrentUser, internal_only, require_roles
 
+from .fotos import FOTOS
 from .models import Quote, QuoteItem, ServiceCatalog
 
 Category = Literal["MANTENIMIENTO", "REPARACION", "DIAGNOSTICO"]
@@ -32,6 +33,11 @@ def seed(db: Session):
         for name, desc, cat, price, hours in DEMO_CATALOG:
             db.add(ServiceCatalog(name=name, description=desc, category=cat, base_price=price, estimated_hours=hours))
         db.commit()
+    # fotos reales para los servicios de demostración que aún no tienen imagen
+    for s in db.scalars(select(ServiceCatalog).where(ServiceCatalog.image_url.is_(None),
+                                                    ServiceCatalog.name.in_(FOTOS))):
+        s.image_url, s.image_credit, s.image_source = FOTOS[s.name]
+    db.commit()
 
 
 app = create_app("Servicios y Cotizaciones", "Catálogo de servicios del taller y cotizaciones de las órdenes.", seed=seed)
@@ -45,6 +51,9 @@ class CatalogIn(BaseModel):
     base_price: float = Field(ge=0)
     estimated_hours: float = Field(default=1, gt=0)
     active: bool = True
+    image_url: str | None = None
+    image_credit: str | None = None
+    image_source: str | None = None
 
 
 class CatalogOut(CatalogIn):

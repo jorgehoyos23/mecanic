@@ -44,13 +44,13 @@ def schedule_status(now: datetime | None = None) -> dict:
     is_open = forced == "abierto" or (forced != "cerrado" and OPEN_HOUR <= now.hour < CLOSE_HOUR)
     if is_open:
         change = now.replace(hour=CLOSE_HOUR, minute=0, second=0, microsecond=0)
-        message = f"Estamos atendiendo. Recibimos solicitudes hasta las {_hour_label(CLOSE_HOUR)}."
+        message = f"Estamos atendiendo. Recibimos solicitudes hasta las {_hour_label(CLOSE_HOUR)}"
     else:
         change = now.replace(hour=OPEN_HOUR, minute=0, second=0, microsecond=0)
         if now.hour >= CLOSE_HOUR:
             change += timedelta(days=1)
         message = (f"El taller está cerrado: no hay servicios disponibles entre las {_hour_label(CLOSE_HOUR)} "
-                   f"y las {_hour_label(OPEN_HOUR)}. Vuelve a partir de las {_hour_label(OPEN_HOUR)}.")
+                   f"y las {_hour_label(OPEN_HOUR)}; vuelve a partir de las {_hour_label(OPEN_HOUR)}")
     return {"open": is_open, "message": message, "now": now.isoformat(), "next_change": change.isoformat(),
             "open_hour": OPEN_HOUR, "close_hour": CLOSE_HOUR, "timezone": str(TZ),
             "hours_label": f"{_hour_label(OPEN_HOUR)} – {_hour_label(CLOSE_HOUR)}"}

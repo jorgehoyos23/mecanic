@@ -16,9 +16,11 @@ Detener con Ctrl+C.
 import http.server
 import os
 import pathlib
+import socket
 import socketserver
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -125,6 +127,11 @@ class Gateway(http.server.BaseHTTPRequestHandler):
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
+    request_queue_size = 64
+
+
+class Server6(Server):
+    address_family = socket.AF_INET6
 
 
 if __name__ == "__main__":
@@ -132,6 +139,11 @@ if __name__ == "__main__":
     procs = start_services()
     print(f"\nPlataforma lista en  http://localhost:{GATEWAY_PORT}   (Ctrl+C para detener)\n")
     try:
+        # 'localhost' en Windows prueba primero IPv6 (::1); escuchar en ambas evita esperas de ~2 s por conexión
+        try:
+            threading.Thread(target=Server6(("::1", GATEWAY_PORT), Gateway).serve_forever, daemon=True).start()
+        except OSError:
+            pass  # sin IPv6: basta con IPv4
         Server(("127.0.0.1", GATEWAY_PORT), Gateway).serve_forever()
     except KeyboardInterrupt:
         pass

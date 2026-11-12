@@ -17,6 +17,9 @@ class ServiceCatalog(Base):
     base_price: Mapped[float] = mapped_column(Double, default=0)
     estimated_hours: Mapped[float] = mapped_column(Double, default=1)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    image_credit: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    image_source: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class Quote(Base):
