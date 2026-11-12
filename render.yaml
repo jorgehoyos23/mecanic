@@ -1,4 +1,6 @@
 # Blueprint de Render: en el panel de Render -> New -> Blueprint -> elige este repositorio.
+# Sin DATABASE_URL la app usa SQLite dentro del contenedor (los datos se reinician al redeplegar).
+# Para datos permanentes: crea un Postgres en Render y agrega la variable DATABASE_URL al servicio.
 services:
   - type: web
     name: mecasolic
@@ -7,15 +9,5 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/auth/health
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: mecasolic-db
-          property: connectionString
       - key: JWT_SECRET
         generateValue: true
-
-databases:
-  - name: mecasolic-db
-    plan: free
-    databaseName: mecasolic
-    user: mecasolic
